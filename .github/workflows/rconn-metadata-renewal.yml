@@ -1,0 +1,41 @@
+name: RConn signed metadata renewal
+on:
+  schedule:
+    - cron: '37 3 * * *'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Optional exact rconn-vX.Y.Z tag; blank checks all stable releases'
+        type: string
+        required: false
+      test_draft:
+        description: 'Explicitly allow this single draft release for verification (never publish it)'
+        type: boolean
+        default: false
+permissions: {}
+concurrency:
+  group: rconn-signed-metadata-renewal
+  cancel-in-progress: false
+jobs:
+  renew:
+    if: github.repository == 'ahmetakarsu/MedusaRelease'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.402'
+      - name: Verify and renew signed public metadata only
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RCONN_RENEWAL_TAG: ${{ inputs.tag }}
+          RCONN_RENEWAL_TEST_DRAFT: ${{ inputs.test_draft }}
+        run: ./automation/Renew-RConnMetadata.ps1
