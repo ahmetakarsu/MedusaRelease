@@ -20,10 +20,11 @@ if ((Get-FileHash -LiteralPath $toolZip -Algorithm SHA256).Hash -ne
     'A4E237867575538E308F9D111005D19C39051C3CD61DD59026B21B07ED3FB196') { throw 'Verifier hash mismatch.' }
 $tool = Join-Path $work 'verifier'
 Expand-Archive -LiteralPath $toolZip -DestinationPath $tool
-$all = if ($tag) { @(Invoke-Gh -Arguments @('api',('repos/' + $repository + '/releases/tags/' + $tag)) | ConvertFrom-Json) } else {
-    $pages = Invoke-Gh -Arguments @('api',('repos/' + $repository + '/releases?per_page=100'),'--paginate','--slurp') | ConvertFrom-Json
-    @($pages | ForEach-Object { $_ | ForEach-Object { $_ } })
-}
+# GitHub's by-tag endpoint does not return unpublished draft tags. Listing with
+# the same narrowly scoped repository token supports the explicit draft QA route.
+$pages = Invoke-Gh -Arguments @('api',('repos/' + $repository + '/releases?per_page=100'),'--paginate','--slurp') | ConvertFrom-Json
+$all = @($pages | ForEach-Object { $_ | ForEach-Object { $_ } })
+if ($tag) { $all = @($all | Where-Object tag_name -eq $tag) }
 $verified = 0; $changed = 0
 foreach ($release in $all) {
     if ($release.tag_name -notmatch '^rconn-v((0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))$') { continue }
