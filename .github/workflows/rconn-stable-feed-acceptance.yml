@@ -1,0 +1,44 @@
+name: RConn stable feed acceptance
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  public-feed:
+    if: github.repository == 'ahmetakarsu/MedusaRelease'
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.402'
+      - name: Check exact frozen shipping client anonymously
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runDir = Join-Path $env:RUNNER_TEMP ('rconn-feed-' + [Guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $runDir | Out-Null
+          gh release download rconn-metadata-renewal-tool-v1 --repo ahmetakarsu/MedusaRelease --pattern RConn.StableFeedProbe-v1.zip --dir $runDir
+          if ($LASTEXITCODE -ne 0) { throw 'Probe download failed.' }
+          $zip = Join-Path $runDir 'RConn.StableFeedProbe-v1.zip'
+          if ((Get-FileHash -LiteralPath $zip).Hash -ne '302D8FAE9A87F6E5E3C55BFFB7E64F7092785604BAFE57FAD99079AAB67CB9E2') { throw 'Probe digest mismatch.' }
+          Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $runDir 'probe')
+          $start = [Diagnostics.ProcessStartInfo]::new((Get-Command dotnet).Source)
+          $start.UseShellExecute = $false
+          $start.WorkingDirectory = $runDir
+          $start.ArgumentList.Add((Join-Path $runDir 'probe\FeedProbe.dll'))
+          $start.ArgumentList.Add('1.14.53')
+          $start.ArgumentList.Add((Join-Path $runDir 'feed.json'))
+          $start.Environment.Clear()
+          foreach ($name in @('SystemRoot','WINDIR','PATH','DOTNET_ROOT','TEMP','TMP')) {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if ($null -ne $value) { $start.Environment[$name] = $value }
+          }
+          $start.Environment['DOTNET_EnableDiagnostics'] = '0'
+          $process = [Diagnostics.Process]::Start($start)
+          if (-not $process.WaitForExit(60000) -or $process.ExitCode -ne 0) { throw 'Anonymous stable feed acceptance failed.' }
+          $result = Get-Content -LiteralPath (Join-Path $runDir 'feed.json') -Raw | ConvertFrom-Json
+          if ($result.version -ne '1.14.53' -or $result.repeatCheckVersion -ne '1.14.53' -or $result.authenticated) { throw 'Unexpected feed result.' }
+          Write-Output 'PASS anonymous shipping stable-feed client, first and repeated check: 1.14.53; no GitHub token in child environment.'
