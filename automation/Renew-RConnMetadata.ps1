@@ -12,14 +12,31 @@ function Invoke-Gh([string[]]$Arguments) {
 }
 $work = Join-Path $env:RUNNER_TEMP ('rconn-renewal-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $work | Out-Null
-# Immutable tool identity: changing the tool release asset alone cannot change executed code.
-$toolZip = Join-Path $work 'RConn.MetadataRenewal-v1-win-x64.zip'
-Invoke-Gh -Arguments @('release','download','rconn-metadata-renewal-tool-v1','--repo',$repository,'--pattern',
-    'RConn.MetadataRenewal-v1-win-x64.zip','--dir',$work) | Out-Null
-if ((Get-FileHash -LiteralPath $toolZip -Algorithm SHA256).Hash -ne
-    'A4E237867575538E308F9D111005D19C39051C3CD61DD59026B21B07ED3FB196') { throw 'Verifier hash mismatch.' }
-$tool = Join-Path $work 'verifier'
-Expand-Archive -LiteralPath $toolZip -DestinationPath $tool
+# Immutable version/root routing. Public release assets never supply a trusted root or tool
+# hash. v1 remains unchanged for historical releases; v2 has the separately compiled new root.
+function Select-RConnRenewalVerifier([string]$Version) {
+    if($Version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$'){throw 'Invalid verifier release version.'}
+    if([version]$Version -ge [version]'1.14.65') {
+        return [pscustomobject]@{id='v2';tag='rconn-metadata-renewal-tool-v2';asset='RConn.MetadataRenewal-v2-win-x64.zip';
+            sha256='98804CD13FCCE3AE122CB7B5E852B7A50D03953C176B229267D4D3463CE2A1EF'}
+    }
+    return [pscustomobject]@{id='v1';tag='rconn-metadata-renewal-tool-v1';asset='RConn.MetadataRenewal-v1-win-x64.zip';
+        sha256='A4E237867575538E308F9D111005D19C39051C3CD61DD59026B21B07ED3FB196'}
+}
+$verifiers=@{}
+function Get-RConnRenewalVerifier([string]$Version) {
+    $choice=Select-RConnRenewalVerifier $Version
+    if($verifiers.ContainsKey($choice.id)){return $verifiers[$choice.id]}
+    $folder=Join-Path $work $choice.id
+    New-Item -ItemType Directory -Path $folder | Out-Null
+    Invoke-Gh -Arguments @('release','download',$choice.tag,'--repo',$repository,'--pattern',$choice.asset,'--dir',$folder) | Out-Null
+    $toolZip=Join-Path $folder $choice.asset
+    if((Get-FileHash -LiteralPath $toolZip -Algorithm SHA256).Hash -cne $choice.sha256){throw 'Verifier hash mismatch.'}
+    $tool=Join-Path $folder 'verifier'
+    Expand-Archive -LiteralPath $toolZip -DestinationPath $tool
+    $verifiers[$choice.id]=$tool
+    return $tool
+}
 # GitHub's by-tag endpoint does not return unpublished draft tags. Listing with
 # the same narrowly scoped repository token supports the explicit draft QA route.
 $pages = Invoke-Gh -Arguments @('api',('repos/' + $repository + '/releases?per_page=100'),'--paginate','--slurp') | ConvertFrom-Json
@@ -48,6 +65,7 @@ foreach ($release in $all) {
     New-Item -ItemType Directory -Path $nextDir | Out-Null
     $current = Join-Path $inputDir 'rconn-product-update.json'
     $next = Join-Path $nextDir 'rconn-product-update.json'
+    $tool = Get-RConnRenewalVerifier $version
     & dotnet (Join-Path $tool 'RConn.MetadataRenewal.dll') (Join-Path $inputDir 'rconn-product-renewals.json') $current $version $next
     if ($LASTEXITCODE -ne 0) { throw 'Signed renewal verification failed. Existing metadata retained.' }
     $verified++
