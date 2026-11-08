@@ -1,6 +1,11 @@
 name: RConn stable feed acceptance
 on:
   workflow_dispatch:
+    inputs:
+      expected_version:
+        description: 'Exact stable RConn version expected after its authorized publication'
+        type: string
+        required: true
 permissions:
   contents: read
 jobs:
@@ -16,8 +21,11 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          RCONN_EXPECTED_VERSION: ${{ inputs.expected_version }}
         run: |
           $ErrorActionPreference = 'Stop'
+          $expected = $env:RCONN_EXPECTED_VERSION
+          if ($expected -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { throw 'Expected stable version is required.' }
           $runDir = Join-Path $env:RUNNER_TEMP ('rconn-feed-' + [Guid]::NewGuid().ToString('N'))
           New-Item -ItemType Directory -Path $runDir | Out-Null
           gh release download rconn-metadata-renewal-tool-v1 --repo ahmetakarsu/MedusaRelease --pattern RConn.StableFeedProbe-v1.zip --dir $runDir
@@ -29,7 +37,7 @@ jobs:
           $start.UseShellExecute = $false
           $start.WorkingDirectory = $runDir
           $start.ArgumentList.Add((Join-Path $runDir 'probe\FeedProbe.dll'))
-          $start.ArgumentList.Add('1.14.53')
+          $start.ArgumentList.Add($expected)
           $start.ArgumentList.Add((Join-Path $runDir 'feed.json'))
           $start.Environment.Clear()
           foreach ($name in @('SystemRoot','WINDIR','PATH','DOTNET_ROOT','TEMP','TMP')) {
@@ -40,5 +48,5 @@ jobs:
           $process = [Diagnostics.Process]::Start($start)
           if (-not $process.WaitForExit(60000) -or $process.ExitCode -ne 0) { throw 'Anonymous stable feed acceptance failed.' }
           $result = Get-Content -LiteralPath (Join-Path $runDir 'feed.json') -Raw | ConvertFrom-Json
-          if ($result.version -ne '1.14.53' -or $result.repeatCheckVersion -ne '1.14.53' -or $result.authenticated) { throw 'Unexpected feed result.' }
-          Write-Output 'PASS anonymous shipping stable-feed client, first and repeated check: 1.14.53; no GitHub token in child environment.'
+          if ($result.version -ne $expected -or $result.repeatCheckVersion -ne $expected -or $result.authenticated) { throw 'Unexpected feed result.' }
+          Write-Output ("PASS anonymous shipping stable-feed client, first and repeated check: $expected; no GitHub token in child environment.")
